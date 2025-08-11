@@ -62,7 +62,7 @@ wrong_streak = 0
 previous_prediction = None
 previous_session = None
 
-@app.get("/predict")
+@app.get("/hitmd5")
 def predict():
     global history, adjustment_factor, wrong_streak, previous_prediction, previous_session
 
