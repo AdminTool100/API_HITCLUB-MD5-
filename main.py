@@ -26,13 +26,11 @@ def generate_hash(input_string, method='md5'):
     elif method == 'sha512':
         return hashlib.sha512(h).hexdigest()
     else:
-        # Trường hợp này lý tưởng là không nên xảy ra nếu các lệnh gọi được kiểm soát
         raise ValueError("Phương thức băm không xác định")
 
 def analyze_md5_bytes(hash_str, adjustment_factor):
     bytes_list = [hash_str[i:i+2] for i in range(0, len(hash_str), 2)]
-    # Đảm bảo có đủ byte để chọn
-    if len(bytes_list) < 13: # Cần ít nhất chỉ mục 12 (để lấy byte thứ 12)
+    if len(bytes_list) < 13: # MD5 hash có 16 byte, cần ít nhất chỉ mục 12
         raise ValueError("Chuỗi băm MD5 quá ngắn để phân tích byte.")
     selected_bytes = [bytes_list[7], bytes_list[3], bytes_list[12]]
     digits_sum = sum(int(b, 16) for b in selected_bytes)
@@ -47,7 +45,6 @@ def analyze_bits(hash_str):
         return binary.count('1'), binary.count('0')
     except ValueError:
         raise ValueError("Chuỗi thập lục phân không hợp lệ để phân tích bit.")
-
 
 def analyze_even_odd_chars(hash_str):
     even = sum(1 for c in hash_str if c in '02468ace')
@@ -66,56 +63,67 @@ def root():
     return {"message": "API đang chạy, truy cập /hitmd5 để lấy dự đoán"}
 
 # ===== API /hitmd5 =====
-# Biến toàn cục để lưu trạng thái giữa các lần gọi API (cho logic dự đoán)
-history = []
+# Biến toàn cục để lưu trạng thái giữa các lần gọi API
+history = [] # Lịch sử kết quả "tài" hoặc "xỉu" để tính adjustment_factor
 adjustment_factor = 0.0
 wrong_streak = 0
-previous_prediction = None
-previous_session = None
+previous_prediction = None # Lưu dự đoán của CHÍNH chúng ta cho phiên TRƯỚC (lần gọi API trước đó)
+previous_external_session_id = None # Lưu ID phiên NGOÀI (từ API bên ngoài) của phiên đã dự đoán ở lần gọi trước
 
 @app.get("/hitmd5")
 def predict():
-    global history, adjustment_factor, wrong_streak, previous_prediction, previous_session
+    global history, adjustment_factor, wrong_streak, previous_prediction, previous_external_session_id
 
-    # Lấy dữ liệu từ API lịch sử
+    # Lấy dữ liệu từ API bên ngoài
     try:
         response = requests.get("https://hitcolubnhumaubuoitao.onrender.com/txmd5")
-        response.raise_for_status()  # Nâng HTTPError cho các phản hồi xấu (4xx hoặc 5xx)
+        response.raise_for_status() # Nâng HTTPError cho các phản hồi lỗi (4xx hoặc 5xx)
         data = response.json()
     except RequestException as e:
-        # Bắt bất kỳ lỗi liên quan đến yêu cầu nào (sự cố mạng, thời gian chờ, URL xấu, v.v.)
-        raise HTTPException(status_code=500, detail=f"Không thể lấy dữ liệu lịch sử từ API bên ngoài: {e}")
+        raise HTTPException(status_code=500, detail=f"Không thể lấy dữ liệu từ API bên ngoài: {e}")
     except JSONDecodeError:
-        # Bắt lỗi nếu phản hồi không phải JSON hợp lệ
-        raise HTTPException(status_code=500, detail="Dữ liệu lịch sử nhận được không phải định dạng JSON hợp lệ.")
+        raise HTTPException(status_code=500, detail="Dữ liệu nhận được không phải định dạng JSON hợp lệ.")
     except Exception as e:
-        # Bắt bất kỳ lỗi không mong muốn nào khác trong quá trình tìm nạp dữ liệu
-        raise HTTPException(status_code=500, detail=f"Lỗi không xác định khi lấy dữ liệu lịch sử: {e}")
+        raise HTTPException(status_code=500, detail=f"Lỗi không xác định khi lấy dữ liệu: {e}")
 
-    # Kiểm tra dữ liệu lịch sử nhận được
-    if not isinstance(data, list) or len(data) < 2:
-        raise HTTPException(status_code=500, detail="Dữ liệu lịch sử không đủ hoặc không đúng định dạng (cần ít nhất 2 phiên).")
+    # Kiểm tra cấu trúc dữ liệu JSON nhận được
+    if not isinstance(data, dict) or "ket_qua_phien_truoc" not in data or "thong_tin_phien_sau" not in data:
+        raise HTTPException(status_code=500, detail="Cấu trúc dữ liệu JSON từ API bên ngoài không đúng định dạng mong đợi.")
 
-    # Phiên trước (index 1 trong danh sách)
-    prev_game = data[1]
-    # Đảm bảo các khóa cần thiết tồn tại trong dữ liệu phiên trước
-    if "result" not in prev_game or "session" not in prev_game or "dice" not in prev_game:
-        raise HTTPException(status_code=500, detail="Dữ liệu phiên trước thiếu thông tin cần thiết (result, session, dice).")
+    ket_qua_phien_truoc = data["ket_qua_phien_truoc"]
+    thong_tin_phien_sau = data["thong_tin_phien_sau"]
 
-    prev_result = prev_game["result"].lower()
+    # Kiểm tra các khóa cần thiết trong ket_qua_phien_truoc
+    if "Phien" not in ket_qua_phien_truoc or "rs" not in ket_qua_phien_truoc or "d1" not in ket_qua_phien_truoc or "d2" not in ket_qua_phien_truoc or "d3" not in ket_qua_phien_truoc:
+        raise HTTPException(status_code=500, detail="Dữ liệu 'ket_qua_phien_truoc' thiếu thông tin cần thiết (Phien, rs, d1, d2, d3).")
+    
+    # Kiểm tra các khóa cần thiết trong thong_tin_phien_sau
+    if "md5" not in thong_tin_phien_sau:
+        raise HTTPException(status_code=500, detail="Dữ liệu 'thong_tin_phien_sau' thiếu thông tin cần thiết (md5).")
+    
+    # Lấy thông tin phiên vừa kết thúc (mà chúng ta sẽ dùng để điều chỉnh thuật toán)
+    session_id_vua_ket_thuc = ket_qua_phien_truoc["Phien"]
+    result_vua_ket_thuc = ket_qua_phien_truoc["rs"].lower() # 'tài' hoặc 'xỉu'
+    dice_vua_ket_thuc = f"{ket_qua_phien_truoc['d1']},{ket_qua_phien_truoc['d2']},{ket_qua_phien_truoc['d3']}"
 
-    # Nếu có dự đoán trước (từ lần gọi API trước) thì cập nhật điều chỉnh
-    # Chỉ cập nhật nếu phiên hiện tại là phiên tiếp theo của phiên trước đó đã được dự đoán
-    if previous_prediction is not None and previous_session is not None and prev_game["session"] == previous_session + 1:
-        if previous_prediction.lower() != prev_result:
+    # Lấy md5 của phiên sắp tới để đưa ra dự đoán
+    md5_input_phien_sap_toi = thong_tin_phien_sau["md5"]
+    
+    # LOGIC ĐIỀU CHỈNH: So sánh dự đoán TRƯỚC (previous_prediction)
+    # với KẾT QUẢ THỰC TẾ của phiên TRƯỚC (result_vua_ket_thuc)
+    # Chỉ điều chỉnh nếu đây không phải là lần gọi đầu tiên và ID phiên khớp
+    if previous_prediction is not None and previous_external_session_id is not None and session_id_vua_ket_thuc == previous_external_session_id:
+        if previous_prediction.lower() != result_vua_ket_thuc:
             wrong_streak += 1
         else:
             wrong_streak = 0
+        
+        # Thêm kết quả của phiên vừa kết thúc vào lịch sử
+        history.append(result_vua_ket_thuc)
+        # Giới hạn lịch sử để tránh tiêu tốn bộ nhớ quá nhiều
+        if len(history) > 100: # Ví dụ: chỉ giữ 100 phiên gần nhất
+            history.pop(0)
 
-        # Cập nhật lịch sử các kết quả trước đó
-        history.append(prev_result)
-
-        # Tính toán lại hệ số điều chỉnh dựa trên lịch sử và chuỗi sai
         tai_count = history.count("tài")
         xiu_count = history.count("xỉu")
         
@@ -123,56 +131,58 @@ def predict():
             adjustment_factor = min(0.1, 0.05 + 0.01 * wrong_streak)
         elif xiu_count > tai_count:
             adjustment_factor = max(-0.1, -0.05 - 0.01 * wrong_streak)
-        else: # Số lượng tài/xỉu bằng nhau hoặc trạng thái ban đầu
-            adjustment_factor = 0.0
+        else:
+            adjustment_factor = 0.0 # Nếu số lượng bằng nhau hoặc không có lịch sử
 
         if wrong_streak >= 3:
             adjustment_factor *= 1.5
     else:
-        # Nếu không có dự đoán trước hoặc phiên không khớp, đặt lại chuỗi sai và hệ số điều chỉnh
+        # Reset nếu là lần gọi đầu tiên hoặc ID phiên không khớp (có thể do API bên ngoài khởi động lại hoặc có lỗi)
         wrong_streak = 0
         adjustment_factor = 0.0
-        # Xóa lịch sử để tránh dữ liệu cũ ảnh hưởng đến các tính toán mới
-        history = []
+        history = [] # Xóa lịch sử cũ nếu không khớp hoặc mới bắt đầu
 
-
-    # Phiên hiện tại (index 0 trong danh sách)
-    current_game = data[0]
-    # Đảm bảo các khóa cần thiết tồn tại trong dữ liệu phiên hiện tại
-    if "hash" not in current_game or "session" not in current_game:
-        raise HTTPException(status_code=500, detail="Dữ liệu phiên hiện tại thiếu thông tin cần thiết (hash, session).")
-    
-    md5_input = current_game["hash"]
-
-    # Phân tích hash để đưa ra dự đoán
+    # Phân tích hash của phiên SẮP TỚI để đưa ra dự đoán MỚI
     try:
-        hash_md5 = generate_hash(md5_input, 'md5')
-        hash_sha256 = generate_hash(md5_input, 'sha256')
-        hash_sha512 = generate_hash(md5_input, 'sha512')
+        hash_md5_phien_sap_toi = generate_hash(md5_input_phien_sap_toi, 'md5')
+        hash_sha256_phien_sap_toi = generate_hash(md5_input_phien_sap_toi, 'sha256')
+        hash_sha512_phien_sap_toi = generate_hash(md5_input_phien_sap_toi, 'sha512')
 
-        md5_ratio, xiu_ratio, sel_bytes = analyze_md5_bytes(hash_md5, adjustment_factor)
-        bit_1, bit_0 = analyze_bits(hash_sha256)
-        even, odd = analyze_even_odd_chars(hash_sha512)
-        prediction = final_decision((md5_ratio, xiu_ratio), bit_1 - bit_0, even - odd)
+        md5_ratio, xiu_ratio, sel_bytes = analyze_md5_bytes(hash_md5_phien_sap_toi, adjustment_factor)
+        bit_1, bit_0 = analyze_bits(hash_sha256_phien_sap_toi)
+        even, odd = analyze_even_odd_chars(hash_sha512_phien_sap_toi)
+        new_prediction_for_next_session = final_decision((md5_ratio, xiu_ratio), bit_1 - bit_0, even - odd)
     except ValueError as ve:
         raise HTTPException(status_code=500, detail=f"Lỗi trong quá trình phân tích hash: {ve}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi không xác định trong quá trình phân tích hash: {e}")
 
-    # Lưu lại dự đoán và phiên hiện tại cho lần gọi tiếp theo
-    previous_prediction = prediction
-    previous_session = current_game["session"]
+    # Cập nhật previous_prediction và previous_external_session_id cho lần gọi API tiếp theo
+    # previous_prediction giờ đây sẽ là dự đoán của chúng ta cho phiên SẮP TỚI
+    # previous_external_session_id sẽ là ID của phiên SẮP TỚI này
+    # Lần gọi API tiếp theo, chúng ta sẽ dùng các giá trị này để so sánh với ket_qua_phien_truoc
+    previous_prediction = new_prediction_for_next_session
+    previous_external_session_id = session_id_vua_ket_thuc + 1 # ID của phiên mà chúng ta vừa dự đoán
 
     # Trả về kết quả dự đoán
     return {
         "id": "@S77SIMON",
-        "phiên trước": {
-            "dice": prev_game["dice"],
-            "kết quả": "Tài" if prev_result == "tài" else "Xỉu"
+        "thoi_gian_lay_du_lieu": data.get("thoi_gian", "Không có thông tin thời gian"), # Lấy thời gian từ phản hồi gốc
+        "ket_qua_phien_truoc_tu_api_goc": {
+            "Phien": session_id_vua_ket_thuc,
+            "dice": dice_vua_ket_thuc,
+            "ket_qua": "Tài" if result_vua_ket_thuc == "tài" else "Xỉu"
         },
-        "hiện tại": {
-            "phiên": current_game["session"],
-            "md5": hash_md5,
-            "dự đoán": prediction
+        "du_doan_cho_phien_sap_toi": {
+            "phien_sap_toi_id": session_id_vua_ket_thuc + 1,
+            "hash_md5_sap_toi": hash_md5_phien_sap_toi,
+            "du_doan": new_prediction_for_next_session
+        },
+        "thong_tin_dieu_chinh": {
+            "du_doan_lan_truoc": previous_prediction, # Dự đoán của bạn cho phiên hiện tại
+            "ket_qua_phien_truoc": result_vua_ket_thuc, # Kết quả của phiên hiện tại (dùng để điều chỉnh)
+            "chuoi_sai_lien_tiep": wrong_streak,
+            "he_so_dieu_chinh_hien_tai": adjustment_factor,
+            "so_luong_phien_trong_lich_su": len(history)
         }
     }
