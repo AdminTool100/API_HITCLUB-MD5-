@@ -1,7 +1,5 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-# from fastapi.responses import JSONResponse # Có thể cần nhập cái này nếu muốn dùng trực tiếp JSONResponse
-
 import hashlib
 import re
 import requests
@@ -76,29 +74,22 @@ def predict():
         response.raise_for_status()
         data = response.json()
     except RequestException as e:
-        # Nếu muốn chắc chắn UTF-8, bạn có thể làm thế này, nhưng HTTPException thường đủ
-        # return JSONResponse(status_code=500, content={"detail": f"Không thể lấy dữ liệu từ API bên ngoài: {e}"}, media_type="application/json; charset=utf-8")
         raise HTTPException(status_code=500, detail=f"Không thể lấy dữ liệu từ API bên ngoài: {e}")
     except JSONDecodeError:
-        # return JSONResponse(status_code=500, content={"detail": "Dữ liệu nhận được không phải định dạng JSON hợp lệ."}, media_type="application/json; charset=utf-8")
         raise HTTPException(status_code=500, detail="Dữ liệu nhận được không phải định dạng JSON hợp lệ.")
     except Exception as e:
-        # return JSONResponse(status_code=500, content={"detail": f"Lỗi không xác định khi lấy dữ liệu: {e}"}, media_type="application/json; charset=utf-8")
         raise HTTPException(status_code=500, detail=f"Lỗi không xác định khi lấy dữ liệu: {e}")
 
     if not isinstance(data, dict) or "ket_qua_phien_truoc" not in data or "thong_tin_phien_sau" not in data:
-        # return JSONResponse(status_code=500, content={"detail": "Cấu trúc dữ liệu JSON từ API bên ngoài không đúng định dạng mong đợi."}, media_type="application/json; charset=utf-8")
         raise HTTPException(status_code=500, detail="Cấu trúc dữ liệu JSON từ API bên ngoài không đúng định dạng mong đợi.")
 
     ket_qua_phien_truoc = data["ket_qua_phien_truoc"]
     thong_tin_phien_sau = data["thong_tin_phien_sau"]
 
     if "Phien" not in ket_qua_phien_truoc or "rs" not in ket_qua_phien_truoc or "d1" not in ket_qua_phien_truoc or "d2" not in ket_qua_phien_truoc or "d3" not in ket_qua_phien_truoc:
-        # return JSONResponse(status_code=500, content={"detail": "Dữ liệu 'ket_qua_phien_truoc' thiếu thông tin cần thiết (Phien, rs, d1, d2, d3)."}, media_type="application/json; charset=utf-8")
         raise HTTPException(status_code=500, detail="Dữ liệu 'ket_qua_phien_truoc' thiếu thông tin cần thiết (Phien, rs, d1, d2, d3).")
     
     if "md5" not in thong_tin_phien_sau:
-        # return JSONResponse(status_code=500, content={"detail": "Dữ liệu 'thong_tin_phien_sau' thiếu thông tin cần thiết (md5)."}, media_type="application/json; charset=utf-8")
         raise HTTPException(status_code=500, detail="Dữ liệu 'thong_tin_phien_sau' thiếu thông tin cần thiết (md5).")
     
     session_id_vua_ket_thuc = ket_qua_phien_truoc["Phien"]
@@ -144,10 +135,8 @@ def predict():
         even, odd = analyze_even_odd_chars(hash_sha512_phien_sap_toi)
         new_prediction_for_next_session = final_decision((md5_ratio, xiu_ratio), bit_1 - bit_0, even - odd)
     except ValueError as ve:
-        # return JSONResponse(status_code=500, content={"detail": f"Lỗi trong quá trình phân tích hash: {ve}"}, media_type="application/json; charset=utf-8")
         raise HTTPException(status_code=500, detail=f"Lỗi trong quá trình phân tích hash: {ve}")
     except Exception as e:
-        # return JSONResponse(status_code=500, content={"detail": f"Lỗi không xác định trong quá trình phân tích hash: {e}"}, media_type="application/json; charset=utf-8")
         raise HTTPException(status_code=500, detail=f"Lỗi không xác định trong quá trình phân tích hash: {e}")
 
     previous_prediction = new_prediction_for_next_session
