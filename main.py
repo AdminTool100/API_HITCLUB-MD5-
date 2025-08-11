@@ -51,11 +51,12 @@ def final_decision(md5_ratio, bit_diff, even_odd_diff):
     score += 1 if even_odd_diff > 0 else -1
     return "Tài" if score > 0 else "Xỉu"
 
-def parse_and_sum_result(result_string):
-    numbers = list(map(int, re.findall(r'\d+', result_string)))
-    return sum(numbers[:3]) if len(numbers) >= 3 else 0
+# ===== API gốc =====
+@app.get("/")
+def root():
+    return {"message": "API đang chạy, truy cập /hitmd5 để lấy dự đoán"}
 
-# ===== API /predict =====
+# ===== API /hitmd5 =====
 history = []
 adjustment_factor = 0.0
 wrong_streak = 0
@@ -117,7 +118,7 @@ def predict():
         "id": "@S77SIMON",
         "phiên trước": {
             "dice": prev_game["dice"],
-            "kết quả": prev_result
+            "kết quả": "Tài" if prev_result == "tài" else "Xỉu"
         },
         "hiện tại": {
             "phiên": current_game["session"],
