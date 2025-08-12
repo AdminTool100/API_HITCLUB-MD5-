@@ -91,7 +91,7 @@ def predict():
     global prediction_for_next_session_id, our_prediction_for_that_session, last_session_id_from_external_api
     global total_predictions_evaluated, correct_predictions_count
 
-    EXTERNAL_API_URL = "https://binhsexgayvoiphucchimbehitclub.onrender.com/md5"
+    EXTERNAL_API_URL = "https://binhsexgayvoiphucchimbehitclub.onrender.com/txmd5"
 
     try:
         response = requests.get(EXTERNAL_API_URL)
