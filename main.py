@@ -1,15 +1,15 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-# Import JSONResponse to control JSON formatting
-from fastapi.responses import JSONResponse 
+from fastapi.responses import JSONResponse # Import JSONResponse
 import hashlib
 import re
 import requests
 from requests.exceptions import RequestException, JSONDecodeError
-import json # Still need this if you want to use json.dumps for debugging or other purposes, but not for the final return
+import json # Import json for custom encoder
 
 app = FastAPI()
 
+# Configure CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,6 +17,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Configure FastAPI's JSON encoder for pretty-printing and UTF-8 support
+app.json_encoder = lambda obj: json.dumps(obj, indent=4, ensure_ascii=False)
 
 # ==== HASHING METHODS ====
 def generate_hash(input_string, method='md5'):
@@ -95,25 +98,25 @@ def predict():
 
     try:
         response = requests.get(EXTERNAL_API_URL)
-        response.raise_for_status()
+        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
 
         response.encoding = 'utf-8' 
         data = response.json()
     except RequestException as e:
-        print(f"LỖI KẾT NỐI API NGOÀI: {e}") # Debugging
+        print(f"LỖI KẾT NỐI API NGOÀI: {e}") # Debugging: Lỗi kết nối hoặc HTTP 4xx/5xx
         raise HTTPException(status_code=500, detail=f"Không thể lấy dữ liệu từ API bên ngoài: {e}")
     except JSONDecodeError as e:
-        print(f"LỖI GIẢI MÃ JSON: {e}") # Debugging
+        print(f"LỖI GIẢI MÃ JSON: {e}") # Debugging: Dữ liệu không phải JSON hoặc mã hóa sai
         # Có thể in response.text để xem nội dung thô nếu JSONDecodeError xảy ra
         # print(f"Raw response text: {response.text}")
         raise HTTPException(status_code=500, detail="Dữ liệu nhận được không phải định dạng JSON hợp lệ hoặc không thể giải mã với UTF-8.")
     except Exception as e:
-        print(f"LỖI KHÔNG XÁC ĐỊNH: {e}") # Debugging
+        print(f"LỖI KHÔNG XÁC ĐỊNH KHI LẤY DỮ LIỆU: {e}") # Debugging: Lỗi bất ngờ khác
         raise HTTPException(status_code=500, detail=f"Lỗi không xác định khi lấy dữ liệu: {e}")
 
     required_fields = ["Phien", "Xuc_xac_1", "Xuc_xac_2", "Xuc_xac_3", "Ket_qua", "Md5"]
     if not isinstance(data, dict) or not all(field in data for field in required_fields):
-        print(f"LỖI CẤU TRÚC DỮ LIỆU: {data}") # Debugging
+        print(f"LỖI CẤU TRÚC DỮ LIỆU: {data}") # Debugging: Cấu trúc JSON không khớp
         raise HTTPException(status_code=500, detail="Cấu trúc dữ liệu JSON từ API bên ngoài không đúng định dạng mong đợi (thiếu các trường cơ bản).")
     
     current_session_id_from_external_api = data["Phien"]
@@ -177,19 +180,18 @@ def predict():
 
     accuracy = (correct_predictions_count / total_predictions_evaluated) * 100 if total_predictions_evaluated > 0 else 0
 
-    # Tạo dictionary kết quả
+    # Tạo dictionary kết quả với cấu trúc mới theo yêu cầu của bạn
     response_content = {
-        "id": "S77SIMON",
+        "Id": "S77SIMON",
         "thống kê": {
-            "tổng dự đoán đã đánh giá": total_predictions_evaluated,
-            "đúng": correct_predictions_count,
-            "sai": total_predictions_evaluated - correct_predictions_count,
-            "tỷ lệ chính xác": round(accuracy, 2)
+            "ĐÚNG": correct_predictions_count,
+            "SAI": total_predictions_evaluated - correct_predictions_count,
+            "Tỷ lệ chính xác": f"{round(accuracy, 2)}%" # Format as percentage string
         },
         "phiên trước": {
             "phiên": current_session_id_from_external_api,
-            "kết quả": "Tài" if current_session_result_from_external_api == "tài" else "Xỉu",
-            "dice": current_session_dice_from_external_api
+            "dice": current_session_dice_from_external_api,
+            "kết quả": "Tài" if current_session_result_from_external_api == "tài" else "Xỉu"
         },
         "phiên hiện tại": {
             "phiên": next_session_id_to_predict,
@@ -198,22 +200,6 @@ def predict():
         }
     }
     
-    # Trả về JSON được định dạng đẹp bằng JSONResponse
-    # Sử dụng `json.dumps` với `indent` trong encoder của JSONResponse
-    # để đảm bảo JSON luôn đẹp
-    return JSONResponse(
-        content=response_content,
-        media_type="application/json",
-        # Sử dụng json_encoder để định dạng đẹp
-        # render sẽ sử dụng default encoder của Uvicorn/Starlette/FastAPI,
-        # và nó đã có khả năng pretty-print nếu debug=True hoặc env variable set.
-        # Tuy nhiên, nếu muốn đảm bảo, có thể custom encoder:
-        # json_dumps_params={"indent": 4, "ensure_ascii": False} # This does not work directly with JSONResponse
-                                                                # You would set app.json_encoder for this
-    )
-
-# Để đảm bảo FastAPI pretty-print, bạn có thể cấu hình app.json_encoder
-# Cần đặt điều này SAU khi định nghĩa `app = FastAPI()`
-# Lưu ý: Điều này có thể ảnh hưởng đến tất cả các endpoint trả về JSON
-app.json_encoder = lambda obj: json.dumps(obj, indent=4, ensure_ascii=False)
+    # Trả về JSONResponse, FastAPI sẽ sử dụng app.json_encoder đã cấu hình
+    return JSONResponse(content=response_content, media_type="application/json")
 
