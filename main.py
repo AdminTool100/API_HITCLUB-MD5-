@@ -86,7 +86,7 @@ def predict():
     global history, adjustment_factor, wrong_streak, previous_prediction, previous_external_session_id
     global total_predictions_made, correct_predictions_count # Khai báo để có thể sửa đổi
 
-    EXTERNAL_API_URL = "https://binhsexgayvoiphucchimbehitclub.onrender.com/md5"
+    EXTERNAL_API_URL = "https://binhsexgayvoiphucchimbehitclub.onrender.com/txmd5"
 
     try:
         response = requests.get(EXTERNAL_API_URL)
