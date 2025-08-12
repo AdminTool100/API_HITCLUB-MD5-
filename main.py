@@ -15,6 +15,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ==== HASHING METHODS ====
 def generate_hash(input_string, method='md5'):
     h = input_string.encode()
     if method == 'md5':
@@ -24,29 +25,26 @@ def generate_hash(input_string, method='md5'):
     elif method == 'sha512':
         return hashlib.sha512(h).hexdigest()
     else:
-        raise ValueError("Phương thức băm không xác định")
+        raise ValueError("Unknown hash method")
 
-def analyze_md5_bytes(hash_str, adjustment_factor):
-    bytes_list = [hash_str[i:i+2] for i in range(0, len(hash_str), 2)]
-    if len(bytes_list) < 13:
-        raise ValueError("Chuỗi băm MD5 quá ngắn để phân tích byte.")
-    selected_bytes = [bytes_list[7], bytes_list[3], bytes_list[12]]
-    digits_sum = sum(int(b, 16) for b in selected_bytes)
+# ==== HASH ANALYSIS ====
+def analyze_md5(hash_str, adjustment_factor):
+    digits_sum = sum(int(c, 16) for c in hash_str if c.isdigit() or c in 'abcdef')
     tai_ratio = (digits_sum % 100) / 100
     tai_ratio = min(1, max(0, tai_ratio + adjustment_factor))
     xiu_ratio = 1 - tai_ratio
-    return round(tai_ratio * 100, 2), round(xiu_ratio * 100, 2), selected_bytes
+    return round(tai_ratio * 100, 2), round(xiu_ratio * 100, 2)
 
 def analyze_bits(hash_str):
-    try:
-        binary = ''.join(f'{int(c, 16):04b}' for c in hash_str)
-        return binary.count('1'), binary.count('0')
-    except ValueError:
-        raise ValueError("Chuỗi thập lục phân không hợp lệ để phân tích bit.")
+    binary = ''.join(f'{int(c, 16):04b}' for c in hash_str)
+    count_1 = binary.count('1')
+    count_0 = binary.count('0')
+    return count_1, count_0
 
 def analyze_even_odd_chars(hash_str):
     even = sum(1 for c in hash_str if c in '02468ace')
-    return even, len(hash_str) - even
+    odd = len(hash_str) - even
+    return even, odd
 
 def final_decision(md5_ratio, bit_diff, even_odd_diff):
     score = 0
@@ -55,22 +53,43 @@ def final_decision(md5_ratio, bit_diff, even_odd_diff):
     score += 1 if even_odd_diff > 0 else -1
     return "Tài" if score > 0 else "Xỉu"
 
+# ==== SUPPORT ====
+def adjust_prediction_factor(history_results, wrong_streak):
+    tai_count = history_results.count("tài")
+    xiu_count = history_results.count("xỉu")
+    adjustment = 0.0
+    if tai_count > xiu_count:
+        adjustment = min(0.1, 0.05 + 0.01 * wrong_streak)
+    elif xiu_count > tai_count:
+        adjustment = max(-0.1, -0.05 - 0.01 * wrong_streak)
+    if wrong_streak >= 3:
+        adjustment *= 1.5
+    return adjustment
+
 @app.get("/")
 def root():
     return {"message": "API đang chạy, truy cập /hitmd5 để lấy dự đoán"}
 
+# Biến toàn cục để lưu trạng thái và thống kê
 history = []
 adjustment_factor = 0.0
 wrong_streak = 0
 previous_prediction = None
 previous_external_session_id = None
 
+# Thêm biến thống kê
+total_predictions_made = 0
+correct_predictions_count = 0
+
 @app.get("/hitmd5")
 def predict():
     global history, adjustment_factor, wrong_streak, previous_prediction, previous_external_session_id
+    global total_predictions_made, correct_predictions_count # Khai báo để có thể sửa đổi
+
+    EXTERNAL_API_URL = "https://binhsexgayvoiphucchimbehitclub.onrender.com/md5"
 
     try:
-        response = requests.get("https://binhsexgayvoiphucchimbehitclub.onrender.com/txmd5")
+        response = requests.get(EXTERNAL_API_URL)
         response.raise_for_status()
         data = response.json()
     except RequestException as e:
@@ -80,67 +99,63 @@ def predict():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi không xác định khi lấy dữ liệu: {e}")
 
-    if not isinstance(data, dict) or "ket_qua_phien_truoc" not in data or "thong_tin_phien_sau" not in data:
-        raise HTTPException(status_code=500, detail="Cấu trúc dữ liệu JSON từ API bên ngoài không đúng định dạng mong đợi.")
-
-    ket_qua_phien_truoc = data["ket_qua_phien_truoc"]
-    thong_tin_phien_sau = data["thong_tin_phien_sau"]
-
-    if "Phien" not in ket_qua_phien_truoc or "rs" not in ket_qua_phien_truoc or "d1" not in ket_qua_phien_truoc or "d2" not in ket_qua_phien_truoc or "d3" not in ket_qua_phien_truoc:
-        raise HTTPException(status_code=500, detail="Dữ liệu 'ket_qua_phien_truoc' thiếu thông tin cần thiết (Phien, rs, d1, d2, d3).")
+    required_fields = ["Phien", "Xuc_xac_1", "Xuc_xac_2", "Xuc_xac_3", "Ket_qua", "Md5"]
+    if not isinstance(data, dict) or not all(field in data for field in required_fields):
+        raise HTTPException(status_code=500, detail="Cấu trúc dữ liệu JSON từ API bên ngoài không đúng định dạng mong đợi (thiếu các trường cơ bản).")
     
-    if "md5" not in thong_tin_phien_sau:
-        raise HTTPException(status_code=500, detail="Dữ liệu 'thong_tin_phien_sau' thiếu thông tin cần thiết (md5).")
+    session_id_vua_ket_thuc = data["Phien"]
+    result_vua_ket_thuc = data["Ket_qua"].lower()
+    dice_vua_ket_thuc = f"{data['Xuc_xac_1']}-{data['Xuc_xac_2']}-{data['Xuc_xac_3']}"
+    md5_input_phien_sap_toi = data["Md5"]
     
-    session_id_vua_ket_thuc = ket_qua_phien_truoc["Phien"]
-    result_vua_ket_thuc = ket_qua_phien_truoc["rs"].lower()
-    dice_vua_ket_thuc = f"{ket_qua_phien_truoc['d1']}-{ket_qua_phien_truoc['d2']}-{ket_qua_phien_truoc['d3']}"
-
-    md5_input_phien_sap_toi = thong_tin_phien_sau["md5"]
-    
+    # Cập nhật thống kê và hệ số điều chỉnh DỰA TRÊN KẾT QUẢ CỦA PHIÊN TRƯỚC MÀ TA ĐÃ DỰ ĐOÁN
     if previous_prediction is not None and previous_external_session_id is not None and session_id_vua_ket_thuc == previous_external_session_id:
-        if previous_prediction.lower() != result_vua_ket_thuc:
-            wrong_streak += 1
-        else:
+        total_predictions_made += 1 # Đã có một dự đoán được so sánh
+        if previous_prediction.lower() == result_vua_ket_thuc:
+            correct_predictions_count += 1
             wrong_streak = 0
+        else:
+            wrong_streak += 1
         
         history.append(result_vua_ket_thuc)
         if len(history) > 100:
             history.pop(0)
 
-        tai_count = history.count("tài")
-        xiu_count = history.count("xỉu")
-        
-        if tai_count > xiu_count:
-            adjustment_factor = min(0.1, 0.05 + 0.01 * wrong_streak)
-        elif xiu_count > tai_count:
-            adjustment_factor = max(-0.1, -0.05 - 0.01 * wrong_streak)
-        else:
-            adjustment_factor = 0.0
-
-        if wrong_streak >= 3:
-            adjustment_factor *= 1.5
+        adjustment_factor = adjust_prediction_factor(history, wrong_streak)
     else:
+        # Reset nếu là lần gọi đầu tiên hoặc ID phiên không khớp
+        # Không reset total_predictions_made và correct_predictions_count ở đây,
+        # vì chúng ta muốn thống kê toàn bộ hoạt động từ khi server khởi động.
         wrong_streak = 0
         adjustment_factor = 0.0
-        history = []
+        history = [] # Reset lịch sử riêng cho việc điều chỉnh hệ số
 
+    # Phân tích hash của phiên SẮP TỚI để đưa ra dự đoán MỚI
     try:
         hash_md5_phien_sap_toi = generate_hash(md5_input_phien_sap_toi, 'md5')
         hash_sha256_phien_sap_toi = generate_hash(md5_input_phien_sap_toi, 'sha256')
         hash_sha512_phien_sap_toi = generate_hash(md5_input_phien_sap_toi, 'sha512')
 
-        md5_ratio, xiu_ratio, sel_bytes = analyze_md5_bytes(hash_md5_phien_sap_toi, adjustment_factor)
+        md5_ratio = analyze_md5(hash_md5_phien_sap_toi, adjustment_factor)
+        
         bit_1, bit_0 = analyze_bits(hash_sha256_phien_sap_toi)
+        bit_diff = bit_1 - bit_0
+
         even, odd = analyze_even_odd_chars(hash_sha512_phien_sap_toi)
-        new_prediction_for_next_session = final_decision((md5_ratio, xiu_ratio), bit_1 - bit_0, even - odd)
+        even_odd_diff = even - odd
+
+        new_prediction_for_next_session = final_decision(md5_ratio, bit_diff, even_odd_diff)
     except ValueError as ve:
         raise HTTPException(status_code=500, detail=f"Lỗi trong quá trình phân tích hash: {ve}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi không xác định trong quá trình phân tích hash: {e}")
 
+    # Cập nhật `previous_prediction` và `previous_external_session_id` cho lần gọi API tiếp theo
     previous_prediction = new_prediction_for_next_session
-    previous_external_session_id = session_id_vua_ket_thuc + 1
+    previous_external_session_id = session_id_vua_ket_thuc
+
+    # Tính tỷ lệ chính xác hiện tại
+    accuracy = (correct_predictions_count / total_predictions_made) * 100 if total_predictions_made > 0 else 0
 
     return {
         "id": "S77SIMON",
@@ -153,5 +168,11 @@ def predict():
             "phiên": session_id_vua_ket_thuc + 1,
             "mã md5": md5_input_phien_sap_toi,
             "dự đoán": new_prediction_for_next_session
+        },
+        "thống kê": {
+            "tổng dự đoán": total_predictions_made,
+            "đúng": correct_predictions_count,
+            "sai": total_predictions_made - correct_predictions_count,
+            "tỷ lệ chính xác": round(accuracy, 2)
         }
     }
