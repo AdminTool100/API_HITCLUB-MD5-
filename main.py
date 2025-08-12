@@ -6,7 +6,7 @@ import re
 import requests
 from requests.exceptions import RequestException, JSONDecodeError
 import json
-import unicodedata # Thêm thư viện này để xử lý Unicode
+# import unicodedata # Không cần thư viện này nữa nếu bạn muốn giữ dấu
 
 app = FastAPI()
 
@@ -18,21 +18,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Cấu hình FastAPI's JSON encoder cho pretty-printing và UTF-8 (vẫn giữ ensure_ascii=False
-# vì hàm remove_vietnamese_accents sẽ xử lý việc loại bỏ dấu)
+# Cấu hình FastAPI's JSON encoder cho pretty-printing và hỗ trợ tiếng Việt có dấu
+# ensure_ascii=False là quan trọng để giữ lại các ký tự có dấu
 app.json_encoder = lambda obj: json.dumps(obj, indent=4, ensure_ascii=False)
 
-# ==== HÀM MỚI: LOẠI BỎ DẤU TIẾNG VIỆT ====
-def remove_vietnamese_accents(text):
-    if not isinstance(text, str):
-        return text # Trả về nguyên văn nếu không phải chuỗi
-
-    # Chuyển đổi chuỗi về dạng NFD (Canonical Decomposition Form)
-    # để tách các ký tự có dấu thành ký tự cơ bản và dấu phụ
-    text = unicodedata.normalize('NFD', text)
-    # Mã hóa về ascii và bỏ qua các ký tự không phải ascii, rồi giải mã về utf-8
-    text = text.encode('ascii', 'ignore').decode('utf-8')
-    return text
+# ==== HÀM remove_vietnamese_accents ĐÃ BỊ LOẠI BỎ ====
+# def remove_vietnamese_accents(text):
+#     if not isinstance(text, str):
+#         return text
+#     text = unicodedata.normalize('NFD', text)
+#     text = text.encode('ascii', 'ignore').decode('utf-8')
+#     return text
 
 # ==== HASHING METHODS ====
 def generate_hash(input_string, method='md5'):
@@ -57,7 +53,7 @@ def analyze_md5(hash_str, adjustment_factor):
 def analyze_bits(hash_str):
     binary = ''.join(f'{int(c, 16):04b}' for c in hash_str)
     count_1 = binary.count('1')
-    count_0 = binary = binary.count('0') # Fixed typo here
+    count_0 = binary.count('0')
     return count_1, count_0
 
 def analyze_even_odd_chars(hash_str):
@@ -157,7 +153,7 @@ def predict():
         last_session_id_from_external_api = current_session_id_from_external_api
     
     elif prediction_for_next_session_id is None:
-        last_session_id_from_external_api = current_session_id_from_external_api
+        last_session_id_from_external_id = current_session_id_from_external_api
         history = []
         adjustment_factor = 0.0
         wrong_streak = 0
@@ -191,25 +187,24 @@ def predict():
 
     accuracy = (correct_predictions_count / total_predictions_evaluated) * 100 if total_predictions_evaluated > 0 else 0
 
-    # Tạo dictionary kết quả với cấu trúc mới và áp dụng remove_vietnamese_accents
+    # Tạo dictionary kết quả với cấu trúc mới và sử dụng tiếng Việt có dấu
     response_content = {
         "Id": "S77SIMON",
-        "thong ke": { # Đổi tên field để không có dấu
-            "DUNG": correct_predictions_count, # Đổi tên field để không có dấu
-            "SAI": total_predictions_evaluated - correct_predictions_count, # Đổi tên field để không có dấu
-            "Ty le chinh xac": f"{round(accuracy, 2)}%" # Đổi tên field để không có dấu
+        "thống kê": { # Đã có dấu trở lại
+            "ĐÚNG": correct_predictions_count, # Đã có dấu trở lại
+            "SAI": total_predictions_evaluated - correct_predictions_count, # Đã có dấu trở lại
+            "Tỷ lệ chính xác": f"{round(accuracy, 2)}%" # Đã có dấu trở lại
         },
-        "phien truoc": { # Đổi tên field để không có dấu
-            "phien": current_session_id_from_external_api,
+        "phiên trước": { # Đã có dấu trở lại
+            "phiên": current_session_id_from_external_api,
             "dice": current_session_dice_from_external_api,
-            "ket qua": remove_vietnamese_accents("Tài") if current_session_result_from_external_api == "tài" else remove_vietnamese_accents("Xỉu") # Áp dụng hàm
+            "kết quả": "Tài" if current_session_result_from_external_api == "tài" else "Xỉu" # Giữ nguyên có dấu
         },
-        "phien hien tai": { # Đổi tên field để không có dấu
-            "phien": next_session_id_to_predict,
-            "ma md5": md5_for_current_session, # Đổi tên field để không có dấu
-            "du doan": remove_vietnamese_accents(new_prediction_result) # Áp dụng hàm
+        "phiên hiện tại": { # Đã có dấu trở lại
+            "phiên": next_session_id_to_predict,
+            "mã md5": md5_for_current_session, # Đã có dấu trở lại
+            "dự đoán": new_prediction_result # Giữ nguyên có dấu
         }
     }
     
     return JSONResponse(content=response_content, media_type="application/json")
-
