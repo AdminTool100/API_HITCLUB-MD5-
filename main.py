@@ -70,7 +70,7 @@ def predict():
     global history, adjustment_factor, wrong_streak, previous_prediction, previous_external_session_id
 
     try:
-        response = requests.get("https://hitcolubnhumaubuoitao.onrender.com/txmd5")
+        response = requests.get("https://binhsexgayvoiphucchimbehitclub.onrender.com/txmd5")
         response.raise_for_status()
         data = response.json()
     except RequestException as e:
