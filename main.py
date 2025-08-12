@@ -4,6 +4,7 @@ import hashlib
 import re
 import requests
 from requests.exceptions import RequestException, JSONDecodeError
+import json # Import the json library
 
 app = FastAPI()
 
@@ -53,17 +54,16 @@ def final_decision(md5_ratio, bit_diff, even_odd_diff):
     score += 1 if even_odd_diff > 0 else -1
     return "Tài" if score > 0 else "Xỉu"
 
-# ==== SUPPORT ====
-def adjust_prediction_factor(history_results, wrong_streak):
+# ==== SUPPORT (ADJUSTED) ====
+def adjust_prediction_factor(history_results):
     tai_count = history_results.count("tài")
     xiu_count = history_results.count("xỉu")
     adjustment = 0.0
+
     if tai_count > xiu_count:
-        adjustment = min(0.1, 0.05 + 0.01 * wrong_streak)
+        adjustment = 0.02
     elif xiu_count > tai_count:
-        adjustment = max(-0.1, -0.05 - 0.01 * wrong_streak)
-    if wrong_streak >= 3:
-        adjustment *= 1.5
+        adjustment = -0.02
     return adjustment
 
 @app.get("/")
@@ -74,28 +74,33 @@ def root():
 history = []
 adjustment_factor = 0.0
 wrong_streak = 0
-previous_prediction = None
-previous_external_session_id = None
 
-# Thêm biến thống kê
-total_predictions_made = 0
+prediction_for_next_session_id = None
+our_prediction_for_that_session = None
+
+last_session_id_from_external_api = None
+
+total_predictions_evaluated = 0
 correct_predictions_count = 0
 
 @app.get("/hitmd5")
 def predict():
-    global history, adjustment_factor, wrong_streak, previous_prediction, previous_external_session_id
-    global total_predictions_made, correct_predictions_count # Khai báo để có thể sửa đổi
+    global history, adjustment_factor, wrong_streak
+    global prediction_for_next_session_id, our_prediction_for_that_session, last_session_id_from_external_api
+    global total_predictions_evaluated, correct_predictions_count
 
     EXTERNAL_API_URL = "https://binhsexgayvoiphucchimbehitclub.onrender.com/txmd5"
 
     try:
         response = requests.get(EXTERNAL_API_URL)
         response.raise_for_status()
+
+        response.encoding = 'utf-8' 
         data = response.json()
     except RequestException as e:
         raise HTTPException(status_code=500, detail=f"Không thể lấy dữ liệu từ API bên ngoài: {e}")
     except JSONDecodeError:
-        raise HTTPException(status_code=500, detail="Dữ liệu nhận được không phải định dạng JSON hợp lệ.")
+        raise HTTPException(status_code=500, detail="Dữ liệu nhận được không phải định dạng JSON hợp lệ hoặc không thể giải mã với UTF-8.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi không xác định khi lấy dữ liệu: {e}")
 
@@ -103,76 +108,85 @@ def predict():
     if not isinstance(data, dict) or not all(field in data for field in required_fields):
         raise HTTPException(status_code=500, detail="Cấu trúc dữ liệu JSON từ API bên ngoài không đúng định dạng mong đợi (thiếu các trường cơ bản).")
     
-    session_id_vua_ket_thuc = data["Phien"]
-    result_vua_ket_thuc = data["Ket_qua"].lower()
-    dice_vua_ket_thuc = f"{data['Xuc_xac_1']}-{data['Xuc_xac_2']}-{data['Xuc_xac_3']}"
-    md5_input_phien_sap_toi = data["Md5"]
-    
-    # Cập nhật thống kê và hệ số điều chỉnh DỰA TRÊN KẾT QUẢ CỦA PHIÊN TRƯỚC MÀ TA ĐÃ DỰ ĐOÁN
-    if previous_prediction is not None and previous_external_session_id is not None and session_id_vua_ket_thuc == previous_external_session_id:
-        total_predictions_made += 1 # Đã có một dự đoán được so sánh
-        if previous_prediction.lower() == result_vua_ket_thuc:
+    current_session_id_from_external_api = data["Phien"]
+    current_session_result_from_external_api = data["Ket_qua"].lower()
+    current_session_dice_from_external_api = f"{data['Xuc_xac_1']}-{data['Xuc_xac_2']}-{data['Xuc_xac_3']}"
+    md5_for_current_session = data["Md5"]
+
+    # --- LOGIC CẬP NHẬT THỐNG KÊ ---
+    if our_prediction_for_that_session is not None and \
+       current_session_id_from_external_api == prediction_for_next_session_id and \
+       current_session_id_from_external_api != last_session_id_from_external_api:
+        
+        total_predictions_evaluated += 1 
+
+        if our_prediction_for_that_session.lower() == current_session_result_from_external_api:
             correct_predictions_count += 1
             wrong_streak = 0
         else:
             wrong_streak += 1
         
-        history.append(result_vua_ket_thuc)
+        history.append(current_session_result_from_external_api)
         if len(history) > 100:
             history.pop(0)
 
-        adjustment_factor = adjust_prediction_factor(history, wrong_streak)
-    else:
-        # Reset nếu là lần gọi đầu tiên hoặc ID phiên không khớp
-        # Không reset total_predictions_made và correct_predictions_count ở đây,
-        # vì chúng ta muốn thống kê toàn bộ hoạt động từ khi server khởi động.
-        wrong_streak = 0
-        adjustment_factor = 0.0
-        history = [] # Reset lịch sử riêng cho việc điều chỉnh hệ số
-
-    # Phân tích hash của phiên SẮP TỚI để đưa ra dự đoán MỚI
-    try:
-        hash_md5_phien_sap_toi = generate_hash(md5_input_phien_sap_toi, 'md5')
-        hash_sha256_phien_sap_toi = generate_hash(md5_input_phien_sap_toi, 'sha256')
-        hash_sha512_phien_sap_toi = generate_hash(md5_input_phien_sap_toi, 'sha512')
-
-        md5_ratio = analyze_md5(hash_md5_phien_sap_toi, adjustment_factor)
+        adjustment_factor = adjust_prediction_factor(history)
         
-        bit_1, bit_0 = analyze_bits(hash_sha256_phien_sap_toi)
+        last_session_id_from_external_api = current_session_id_from_external_api
+    
+    elif prediction_for_next_session_id is None:
+        last_session_id_from_external_api = current_session_id_from_external_api
+        history = []
+        adjustment_factor = 0.0
+        wrong_streak = 0
+
+    # --- LOGIC DỰ ĐOÁN CHO PHIÊN MỚI ---
+    next_session_id_to_predict = current_session_id_from_external_api + 1
+
+    try:
+        hash_md5_for_prediction = generate_hash(md5_for_current_session, 'md5')
+        hash_sha256_for_prediction = generate_hash(md5_for_current_session, 'sha256')
+        hash_sha512_for_prediction = generate_hash(md5_for_current_session, 'sha512')
+
+        md5_ratio = analyze_md5(hash_md5_for_prediction, adjustment_factor)
+        
+        bit_1, bit_0 = analyze_bits(hash_sha256_for_prediction)
         bit_diff = bit_1 - bit_0
 
-        even, odd = analyze_even_odd_chars(hash_sha512_phien_sap_toi)
+        even, odd = analyze_even_odd_chars(hash_sha512_for_prediction)
         even_odd_diff = even - odd
 
-        new_prediction_for_next_session = final_decision(md5_ratio, bit_diff, even_odd_diff)
+        new_prediction_result = final_decision(md5_ratio, bit_diff, even_odd_diff)
     except ValueError as ve:
         raise HTTPException(status_code=500, detail=f"Lỗi trong quá trình phân tích hash: {ve}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi không xác định trong quá trình phân tích hash: {e}")
 
-    # Cập nhật `previous_prediction` và `previous_external_session_id` cho lần gọi API tiếp theo
-    previous_prediction = new_prediction_for_next_session
-    previous_external_session_id = session_id_vua_ket_thuc
+    prediction_for_next_session_id = next_session_id_to_predict
+    our_prediction_for_that_session = new_prediction_result
 
-    # Tính tỷ lệ chính xác hiện tại
-    accuracy = (correct_predictions_count / total_predictions_made) * 100 if total_predictions_made > 0 else 0
+    accuracy = (correct_predictions_count / total_predictions_evaluated) * 100 if total_predictions_evaluated > 0 else 0
 
-    return {
+    # Tạo dictionary kết quả
+    response_data = {
         "id": "S77SIMON",
+        "thống kê": {
+            "tổng dự đoán đã đánh giá": total_predictions_evaluated,
+            "đúng": correct_predictions_count,
+            "sai": total_predictions_evaluated - correct_predictions_count,
+            "tỷ lệ chính xác": round(accuracy, 2)
+        },
         "phiên trước": {
-            "phiên": session_id_vua_ket_thuc,
-            "dice": dice_vua_ket_thuc,
-            "kết quả": "Tài" if result_vua_ket_thuc == "tài" else "Xỉu"
+            "phiên": current_session_id_from_external_api,
+            "kết quả": "Tài" if current_session_result_from_external_api == "tài" else "Xỉu",
+            "dice": current_session_dice_from_external_api
         },
         "phiên hiện tại": {
-            "phiên": session_id_vua_ket_thuc + 1,
-            "mã md5": md5_input_phien_sap_toi,
-            "dự đoán": new_prediction_for_next_session
-        },
-        "thống kê": {
-            "tổng dự đoán": total_predictions_made,
-            "đúng": correct_predictions_count,
-            "sai": total_predictions_made - correct_predictions_count,
-            "tỷ lệ chính xác": round(accuracy, 2)
+            "phiên": next_session_id_to_predict,
+            "mã md5": md5_for_current_session,
+            "dự đoán": new_prediction_result
         }
     }
+    
+    # Trả về JSON được định dạng đẹp
+    return json.dumps(response_data, indent=4, ensure_ascii=False) # ensure_ascii=False để giữ tiếng Việt
